@@ -12,23 +12,31 @@ app = FastAPI(title="Hybrid Phishing Detection API with Secure Database", versio
 init_db()
 
 # ==========================================
-# تحميل النماذج (الروابط + BERT)
+# تحميل نموذج الروابط فقط عند الإقلاع (خفيف ولا يستهلك رام)
 # ==========================================
 URL_MODEL_PATH = "my_phishing_url_model.pkl"
 url_model = joblib.load(URL_MODEL_PATH)
 print("✅ تم تحميل نموذج الروابط بنجاح.")
 
+# ==========================================
+# التحميل الكسول لنموذج BERT (يتحمل فقط عند الحاجة لتفريغ الذاكرة)
+# ==========================================
 BERT_MODEL_DIR = "shomoukh/my_phishing_bert_model"
-try:
-    tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_DIR)
-    bert_model = AutoModelForSequenceClassification.from_pretrained(
-        BERT_MODEL_DIR, 
-        torch_dtype=torch.float16
-    )
-    bert_model.eval()
-    print("✅ تم تحميل نموذج BERT بنجاح.")
-except Exception as e:
-    print(f"⚠️ خطأ في تحميل نموذج BERT: {e}")
+tokenizer = None
+bert_model = None
+
+def get_bert_model():
+    global tokenizer, bert_model
+    if bert_model is None or tokenizer is None:
+        print("⏳ جاري تحميل نموذج BERT لأول طلب فحص...")
+        tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_DIR)
+        bert_model = AutoModelForSequenceClassification.from_pretrained(
+            BERT_MODEL_DIR,
+            torch_dtype=torch.float16
+        )
+        bert_model.eval()
+        print("✅ تم تحميل نموذج BERT بنجاح.")
+    return tokenizer, bert_model
 
 class ScanRequest(BaseModel):
     user_id: int
@@ -84,11 +92,13 @@ def scan_complete(data: ScanRequest):
     except Exception as e:
         results["url_analysis"] = {"error": str(e)}
 
-    # 2. فحص الإيميل بنموذج الـ BERT وحفظه تلقائياً في قاعدة البيانات
+    # 2. فحص الإيميل بنموذج الـ BERT (يتم تحميله عند الطلب حصرياً لتوفير الرام)
     try:
-        inputs = tokenizer(data.email_text, return_tensors="pt", truncation=True, padding=True, max_length=512)
+        cur_tokenizer, cur_bert_model = get_bert_model()
+        
+        inputs = cur_tokenizer(data.email_text, return_tensors="pt", truncation=True, padding=True, max_length=512)
         with torch.no_grad():
-            outputs = bert_model(**inputs)
+            outputs = cur_bert_model(**inputs)
             probs = torch.nn.functional.softmax(outputs.logits, dim=-1)
             pred_label = torch.argmax(probs, dim=-1).item()
             confidence = probs[0][pred_label].item()
@@ -114,7 +124,6 @@ def scan_complete(data: ScanRequest):
 
     return {"status": "success", "results": results}
 
-# مسار لجلب سجلات الفحص الخاصة بالمستخدم (للإيميلات والروابط معاً)
 @app.get("/history/{user_id}")
 def get_history(user_id: int):
     emails_history = get_email_history(user_id)
