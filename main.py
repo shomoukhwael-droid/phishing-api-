@@ -21,7 +21,10 @@ print("✅ تم تحميل نموذج الروابط بنجاح.")
 BERT_MODEL_DIR = "shomoukh/my_phishing_bert_model"
 try:
     tokenizer = AutoTokenizer.from_pretrained(BERT_MODEL_DIR)
-    bert_model = AutoModelForSequenceClassification.from_pretrained(BERT_MODEL_DIR)
+    bert_model = AutoModelForSequenceClassification.from_pretrained(
+        BERT_MODEL_DIR, 
+        torch_dtype=torch.float16
+    )
     bert_model.eval()
     print("✅ تم تحميل نموذج BERT بنجاح.")
 except Exception as e:
